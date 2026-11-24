@@ -153,8 +153,9 @@ All configuration is driven by environment variables. The table below lists supp
 | `AI_SAST_WEBHOOK_SECRET` | Optional secret for HMAC signature. | — |
 | `AI_SAST_WEBHOOK_TYPE` | Webhook format: `slack`, `teams`, `discord`, or `generic`. | `generic` |
 | **Vector / logging** | | |
-| `AI_SAST_VECTOR_URL` | Vector/log aggregator endpoint URL. | — |
+| `AI_SAST_VECTOR_URL` | Vector/log aggregator endpoint URL. A bare host becomes `https://<host>:8088/services/collector`; `http://` URLs are refused unless `AI_SAST_VECTOR_ALLOW_INSECURE_HTTP` is set. | — |
 | `AI_SAST_VECTOR_TOKEN` | Authentication token for the vector endpoint. | — |
+| `AI_SAST_VECTOR_ALLOW_INSECURE_HTTP` | Set to `true` to allow an `http://` endpoint (token is sent in cleartext). | `false` |
 
 *Secrets (e.g. `GOOGLE_CREDENTIALS`, `JIRA_API_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) have no default and must be set in the repo.*
 

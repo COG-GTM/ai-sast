@@ -10,8 +10,54 @@ Configure via environment variables to connect to your log aggregation service.
 
 import requests
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Union
+from urllib.parse import urlsplit
+
+DEFAULT_COLLECTOR_PORT = 8088
+DEFAULT_COLLECTOR_PATH = "/services/collector"
+ALLOW_INSECURE_HTTP_ENV = "AI_SAST_VECTOR_ALLOW_INSECURE_HTTP"
+
+
+def _insecure_http_allowed() -> bool:
+    return os.environ.get(ALLOW_INSECURE_HTTP_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def build_endpoint_url(vector_endpoint: str) -> Optional[str]:
+    """
+    Resolve the configured endpoint to the URL events are posted to.
+
+    A bare host (or host:port) gets https:// plus the default collector port/path.
+    An explicit http:// URL is refused unless AI_SAST_VECTOR_ALLOW_INSECURE_HTTP
+    is set, because the token would be sent in cleartext.
+
+    Returns None if the endpoint is unusable.
+    """
+    endpoint = vector_endpoint.strip()
+    scheme = endpoint.split("://", 1)[0].lower() if "://" in endpoint else ""
+
+    if not scheme:
+        host = urlsplit(f"//{endpoint}")
+        if not host.hostname or host.path or host.query or host.fragment:
+            return None
+        netloc = host.netloc if host.port else f"{host.netloc}:{DEFAULT_COLLECTOR_PORT}"
+        return f"https://{netloc}{DEFAULT_COLLECTOR_PATH}"
+
+    if scheme == "https":
+        return endpoint if urlsplit(endpoint).hostname else None
+
+    if scheme == "http":
+        if not _insecure_http_allowed():
+            print(
+                f"⚠️  AI_SAST_VECTOR_URL uses http://; refusing to send the token in cleartext. "
+                f"Use https:// or set {ALLOW_INSECURE_HTTP_ENV}=true to opt in.",
+                file=sys.stderr,
+            )
+            return None
+        return endpoint if urlsplit(endpoint).hostname else None
+
+    return None
 
 
 def get_current_timestamp() -> str:
@@ -32,7 +78,9 @@ def send_security_event(
     file_path: str = "",
     location: str = "",
     cvss_score: str = "",
-    details: Optional[Dict[str, Any]] = None
+    details: Optional[Dict[str, Any]] = None,
+    endpoint: Optional[str] = None,
+    token: Optional[str] = None
 ) -> bool:
     """
     Log security events to the configured vector endpoint.
@@ -51,6 +99,8 @@ def send_security_event(
         location: Location in the file (e.g., "Line 42")
         cvss_score: Numeric CVSS score (e.g., "8.2")
         details: Additional custom fields as dictionary
+        endpoint: Endpoint override (defaults to AI_SAST_VECTOR_URL)
+        token: Token override (defaults to AI_SAST_VECTOR_TOKEN)
     
     Returns:
         True if successfully sent, False otherwise
@@ -58,25 +108,23 @@ def send_security_event(
     
     # AI_SAST_VECTOR_URL: Vector/log aggregator endpoint URL
     # Example: "https://splunk.company.com/services/collector"
-    # Example: "vector.company.com" (will add http:// and port automatically)
+    # Example: "vector.company.com" (will add https://, port 8088 and /services/collector)
     # Example: "https://logs.company.com:8088/collector"
-    vector_endpoint = os.environ.get("AI_SAST_VECTOR_URL")
+    # http:// endpoints are refused unless AI_SAST_VECTOR_ALLOW_INSECURE_HTTP=true
+    vector_endpoint = endpoint or os.environ.get("AI_SAST_VECTOR_URL")
     
     # AI_SAST_VECTOR_TOKEN: Authentication token for the vector endpoint
     # Example: "Splunk ABC123-DEF456-GHI789" (Splunk HEC token)
     # Example: "Bearer eyJhbGciOiJIUzI1NiIs..." (JWT token)
-    vector_token = os.environ.get("AI_SAST_VECTOR_TOKEN")
+    vector_token = token or os.environ.get("AI_SAST_VECTOR_TOKEN")
     
     if not vector_endpoint or not vector_token:
         # Silently skip if logging is not configured
         return False
     
-    # Format the endpoint URL
-    # Support both raw endpoint and host:port format
-    if not vector_endpoint.startswith('http'):
-        endpoint_url = f"http://{vector_endpoint}:8088/services/collector"
-    else:
-        endpoint_url = vector_endpoint
+    endpoint_url = build_endpoint_url(vector_endpoint)
+    if not endpoint_url:
+        return False
     
     # Convert boolean assertion to string
     if isinstance(assertion_condition, bool):
@@ -224,7 +272,9 @@ class VectorClient:
             file_path=file_path,
             location=location,
             cvss_score=cvss_score,
-            details=kwargs
+            details=kwargs,
+            endpoint=self.endpoint,
+            token=self.token
         )
     
     def log_scan_complete(
@@ -256,7 +306,9 @@ class VectorClient:
                 "total_files": total_files,
                 "vulnerabilities_found": vulnerabilities_found,
                 **kwargs
-            }
+            },
+            endpoint=self.endpoint,
+            token=self.token
         )
 
 
