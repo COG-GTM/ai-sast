@@ -7,6 +7,7 @@ Generates beautiful HTML reports that can be displayed in web browsers.
 import os
 import re
 import html
+from urllib.parse import quote, urlsplit
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Set
 import hashlib
@@ -40,32 +41,59 @@ class HTMLReportGenerator:
         return None
 
     def _create_hyperlink(self, repo_url: str, ref_name: str, file_path: str, line_number: Optional[int]) -> Optional[str]:
-        """Creates a link to a specific file and line (GitHub or GitLab compatible)."""
+        """Creates a link to a specific file and line (GitHub or GitLab compatible).
+
+        The ref name and every path segment are percent-encoded, so the result is
+        safe to place in an HTML attribute (after html.escape) or a Markdown link target.
+        """
         if not all([repo_url, ref_name, file_path]):
             return None
-        
-        # Ensure repo_url ends with .git so we can strip it consistently
+
+        repo_url = repo_url.strip()
+        if urlsplit(repo_url).scheme.lower() not in ('http', 'https'):
+            return None
+        if any(c in repo_url for c in '"\'<>`()[] \t\r\n'):
+            return None
+
         if repo_url.endswith('.git'):
             repo_url = repo_url[:-4]
-        
-        # Detect platform and create appropriate link
-        if 'github.com' in repo_url:
-            # GitHub format: /blob/{ref}/{path}#L{line}
-            link = f"{repo_url}/blob/{ref_name}/{file_path}"
-            if line_number:
-                link += f"#L{line_number}"
-        elif 'gitlab.com' in repo_url or '/-/' in repo_url:
-            # GitLab format: /-/blob/{ref}/{path}#L{line}
-            link = f"{repo_url}/-/blob/{ref_name}/{file_path}"
-            if line_number:
-                link += f"#L{line_number}"
+        repo_url = repo_url.rstrip('/')
+
+        encoded_ref = quote(ref_name, safe='/')
+        encoded_path = '/'.join(quote(segment, safe='') for segment in file_path.split('/'))
+
+        if 'gitlab.com' in repo_url or '/-/' in repo_url:
+            link = f"{repo_url}/-/blob/{encoded_ref}/{encoded_path}"
         else:
-            # Generic format (GitHub-style as default)
-            link = f"{repo_url}/blob/{ref_name}/{file_path}"
-            if line_number:
-                link += f"#L{line_number}"
-        
+            # GitHub format (also the default for other hosts)
+            link = f"{repo_url}/blob/{encoded_ref}/{encoded_path}"
+        if line_number:
+            link += f"#L{int(line_number)}"
+
         return link
+
+    # Markdown punctuation that can start links, images, emphasis, headings, lists or tables.
+    _MD_SPECIAL_CHARS = re.compile(r'([\\`*_{}\[\]()#+\-.!|~=])')
+
+    def _escape_markdown_text(self, text: str) -> str:
+        """Escapes model-supplied text for a Markdown comment so it renders as plain text."""
+        escaped = self._MD_SPECIAL_CHARS.sub(r'\\\1', text)
+        escaped = html.escape(escaped)
+        # Break @mentions so model text cannot ping users from the bot account.
+        return escaped.replace('@', '@\u200b')
+
+    @staticmethod
+    def _markdown_code_span(text: str) -> str:
+        """Renders text as an inline code span that cannot be closed early."""
+        cleaned = re.sub(r'[`\r\n]+', ' ', text).strip() or ' '
+        return f"`{cleaned}`"
+
+    @staticmethod
+    def _markdown_code_fence(text: str) -> str:
+        """Wraps text in a fenced code block longer than any backtick run inside it."""
+        longest = max((len(run) for run in re.findall(r'`+', text)), default=0)
+        fence = '`' * max(3, longest + 1)
+        return f"{fence}\n{text}\n{fence}"
 
     def _generate_vuln_id(self, file_path: str, issue: str, location: str) -> str:
         """Generates a unique and stable ID for a vulnerability."""
@@ -232,11 +260,12 @@ class HTMLReportGenerator:
 
                 link = self._create_hyperlink(repo_url, ref_name, file_path_raw, line_num)
                 
-                file_display_text = f"{html.escape(file_path_raw)}:{line_num}" if line_num else html.escape(file_path_raw)
-                file_display = f"[`{file_display_text}`]({link})" if link else f"`{html.escape(file_path_raw)}`"
+                file_display_text = f"{file_path_raw}:{line_num}" if line_num else file_path_raw
+                file_code = self._markdown_code_span(html.escape(file_display_text))
+                file_display = f"[{file_code}]({link})" if link else file_code
                 
-                issue = html.escape(issue_raw)
-                risk = html.escape(vuln.get('risk', 'N/A'))
+                issue = self._escape_markdown_text(issue_raw)
+                risk = self._escape_markdown_text(vuln.get('risk', 'N/A'))
                 fix = html.escape(vuln.get('fix', 'N/A'))
                 cvss_vector = vuln.get('cvss_vector', 'N/A')
 
@@ -253,14 +282,14 @@ class HTMLReportGenerator:
                 md_parts.append(f"**Severity**: {severity}")
                 md_parts.append(f"**Issue**: {issue}")
                 md_parts.append(f"**Location**: {file_display}")
-                md_parts.append(f"**CVSS Vector**: `{html.escape(cvss_vector)}`")
+                md_parts.append(f"**CVSS Vector**: {self._markdown_code_span(html.escape(cvss_vector))}")
                 
                 details = f"<details><summary>📋 Click to see details, risk, and remediation</summary>"
                 details += f"\n\n**Risk:**\n{risk}\n"
                 if validator_reasoning and vuln_id in validator_reasoning and validator_reasoning[vuln_id]:
-                    proof = html.escape(validator_reasoning[vuln_id].strip())
+                    proof = self._escape_markdown_text(validator_reasoning[vuln_id].strip())
                     details += f"\n**Validator proof:** {proof}\n"
-                details += f"\n**Remediation:**\n```\n{fix}\n```\n"
+                details += f"\n**Remediation:**\n{self._markdown_code_fence(fix)}\n"
                 details += "</details>"
                 md_parts.append(details)
                 
@@ -296,7 +325,7 @@ class HTMLReportGenerator:
                 link = self._create_hyperlink(repo_url, ref_name, file_path_raw, line_num)
                 
                 file_display_text = f"{html.escape(file_path_raw)}:{line_num}" if line_num else html.escape(file_path_raw)
-                file_display = f'<a href="{link}" target="_blank">{file_display_text}</a>' if link else html.escape(file_path_raw)
+                file_display = f'<a href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer">{file_display_text}</a>' if link else html.escape(file_path_raw)
                 location_display = html.escape(location_raw)
                 proof_html = ""
                 if validator_reasoning:
