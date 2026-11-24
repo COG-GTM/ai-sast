@@ -39,6 +39,56 @@ def parse_added_lines_from_diff(diff: str) -> str:
     return '\n'.join(added_lines)
 
 
+def _git_output(args: List[str], errors: str = 'surrogateescape') -> str:
+    """Runs git with path quoting disabled and returns decoded stdout."""
+    import subprocess
+    result = subprocess.run(
+        ['git', '-c', 'core.quotePath=false', '--literal-pathspecs'] + args,
+        capture_output=True,
+        check=True
+    )
+    return result.stdout.decode('utf-8', errors=errors)
+
+
+def list_changed_files(base_sha: str, head_sha: str) -> List[Tuple[str, str]]:
+    """
+    Returns (status, path) for every file changed between base and head.
+
+    Uses NUL-separated output so paths with spaces, quotes, newlines or
+    non-ASCII bytes are returned verbatim, and --no-renames so a renamed file
+    is reported as the deletion of the old path plus the addition of the new one.
+    """
+    output = _git_output(['diff', '--name-status', '-z', '--no-renames', f'{base_sha}...{head_sha}'])
+    fields = output.split('\0')
+    entries: List[Tuple[str, str]] = []
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if not status:
+            i += 1
+            continue
+        if status[0] in ('R', 'C'):
+            # Rename/copy records carry old and new path; scan the destination
+            if i + 2 >= len(fields):
+                break
+            entries.append((status[0], fields[i + 2]))
+            i += 3
+        else:
+            if i + 1 >= len(fields):
+                break
+            entries.append((status[0], fields[i + 1]))
+            i += 2
+    return entries
+
+
+def get_file_diff(base_sha: str, head_sha: str, file_path: str) -> str:
+    """Returns the unified diff of one file, always as text (ignores binary/textconv attributes)."""
+    return _git_output([
+        'diff', '--no-renames', '--text', '--no-ext-diff', '--no-textconv',
+        f'{base_sha}...{head_sha}', '--', file_path
+    ], errors='replace')
+
+
 def get_pr_changes_from_github() -> List[Dict]:
     """
     Get PR changes from GitHub Actions environment.
@@ -62,49 +112,29 @@ def get_pr_changes_from_github() -> List[Dict]:
             # Use git diff to get changes
             import subprocess
             try:
-                # Get list of changed files
-                result = subprocess.run(
-                    ['git', 'diff', '--name-status', f'{base_sha}...{head_sha}'],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                
-                for line in result.stdout.strip().split('\n'):
-                    if not line:
-                        continue
-                    
-                    parts = line.split('\t')
-                    if len(parts) < 2:
-                        continue
-                    
-                    status = parts[0]
-                    file_path = parts[1]
-                    
+                for status, file_path in list_changed_files(base_sha, head_sha):
                     # Skip deleted files
                     if status == 'D':
                         continue
-                    
-                    # Get the diff for this file
-                    diff_result = subprocess.run(
-                        ['git', 'diff', f'{base_sha}...{head_sha}', '--', file_path],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    
+
                     changes.append({
-                        'new_path': file_path,
+                        # Non-UTF-8 names are diffed by their raw bytes but reported printably
+                        'new_path': file_path.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace'),
                         'deleted_file': False,
-                        'diff': diff_result.stdout
+                        'diff': get_file_diff(base_sha, head_sha, file_path)
                     })
-                    
+
             except subprocess.CalledProcessError as e:
                 print(f"⚠️  Warning: Git diff failed: {e}")
                 print("Falling back to full repository scan...")
                 return []
     
     return changes
+
+
+def _unscanned_note(files: List[str]) -> str:
+    return (f"**Not scanned - changed file diff was empty ({len(files)} file(s)):** "
+            + ", ".join(f"`{f}`" for f in files[:20]) + (" ..." if len(files) > 20 else ""))
 
 
 def _generate_vuln_id(file_path: str, issue: str, location: str) -> str:
@@ -281,6 +311,7 @@ def main():
     skipped_file_size: List[str] = []
     skipped_total_cap: List[str] = []
     skipped_file_cap: List[str] = []
+    unscanned_empty_diff: List[str] = []
     
     # Initialize scanner
     scanner = SecurityScanner(repo_url=repo_url)
@@ -306,6 +337,10 @@ def main():
             continue
 
         diff = change.get('diff', '')
+        if not diff.strip():
+            unscanned_empty_diff.append(file_path)
+            print(f"❌ Could not read the diff of changed file (not scanned): {file_path}")
+            continue
         added_code = parse_added_lines_from_diff(diff)
 
         if added_code:
@@ -390,7 +425,20 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     scan_id = f"pr-{github_sha[:7] if github_sha else 'unknown'}-{timestamp}"
     
+    if unscanned_empty_diff:
+        print("\n--- Changed files that could not be scanned (empty diff) ---")
+        for file in unscanned_empty_diff:
+            print(f"- {file}")
+        print("------------------------------------------------------------\n")
+
     if not scan_results:
+        if unscanned_empty_diff:
+            with open('pr_comment.md', 'w') as f:
+                f.write("### 🤖 AI-SAST Security Scan\n\n"
+                        "⚠️ **Scan incomplete:** no code was scanned, but changed files could not be read.\n\n"
+                        "### Scan coverage\n\n" + _unscanned_note(unscanned_empty_diff) + "\n")
+            print("⚠️  Changed files could not be scanned; see pr_comment.md.")
+            return
         print("✅ No new code changes to scan (or all files excluded).")
         print("PR scan completed successfully!")
         return
@@ -469,6 +517,8 @@ def main():
         should_post_comment = len(validated_vuln_ids) > 0
     else:
         should_post_comment = vulns_to_validate_count > 0
+    if unscanned_empty_diff:
+        should_post_comment = True
 
     if should_post_comment:
         print("\n💬 Generating markdown report for PR comment...")
@@ -483,6 +533,8 @@ def main():
         )
         
         coverage_notes = []
+        if unscanned_empty_diff:
+            coverage_notes.append(_unscanned_note(unscanned_empty_diff))
         if excluded_files:
             excluded_sorted = sorted(set(excluded_files))
             coverage_notes.append(f"**Excluded from scan ({len(excluded_sorted)} file(s), path keywords):** " + ", ".join(f"`{f}`" for f in excluded_sorted[:20]) + (" ..." if len(excluded_sorted) > 20 else ""))
