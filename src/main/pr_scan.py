@@ -20,7 +20,7 @@ from typing import Optional, List, Dict, Tuple
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.core.scanner import SecurityScanner, is_path_excluded
+from src.core.scanner import SecurityScanner, is_path_excluded, get_exclude_keywords
 from src.core.report import HTMLReportGenerator
 from src.core.validator import validate_findings
 
@@ -28,6 +28,39 @@ try:
     from src.integrations.notifications import WebhookClient
 except ImportError:
     WebhookClient = None
+
+
+COMMENT_TITLE = "🤖 AI-SAST Security Scan"
+
+
+def _format_file_list(files: List[str], limit: int = 20) -> str:
+    return ", ".join(f"`{f}`" for f in files[:limit]) + (" ..." if len(files) > limit else "")
+
+
+def build_coverage_notes(excluded_files: List[str], skipped_files: List[str], rejected_count: int = 0) -> List[str]:
+    """Markdown notes naming every changed file that was not analyzed."""
+    notes = []
+    if excluded_files:
+        excluded_sorted = sorted(set(excluded_files))
+        notes.append(f"**Excluded from scan ({len(excluded_sorted)} file(s), exclusion keywords):** " + _format_file_list(excluded_sorted))
+    if skipped_files:
+        notes.append(f"**Skipped due to size/count limits ({len(skipped_files)} file(s)):** " + _format_file_list(skipped_files))
+    if rejected_count > 0:
+        notes.append(f"**Rejected by validator as false positive:** {rejected_count} finding(s)")
+    return notes
+
+
+def append_coverage_notes(markdown_report: str, coverage_notes: List[str]) -> str:
+    if not coverage_notes:
+        return markdown_report
+    return markdown_report + "\n\n### Scan coverage\n\n" + "\n\n".join(coverage_notes) + "\n"
+
+
+def write_pr_comment(markdown_report: str) -> None:
+    with open('pr_comment.md', 'w') as f:
+        f.write(markdown_report)
+    print("✅ Markdown report saved to pr_comment.md")
+    print("   Use this file to post a PR comment in your workflow")
 
 
 def parse_added_lines_from_diff(diff: str) -> str:
@@ -248,16 +281,9 @@ def main():
     
     # --- Exclusion Logic ---
     # AI_SAST_EXCLUDE_PATHS: Comma-separated paths to exclude from PR scanning (optional)
-    # Example: "dist,build,vendor,docs"
-    default_exclude_keywords = ['test', 'node_modules', 'e2e', 'cypress', 'local', 'jest', 
-                                 'prettierrc', 'mock', 'log', 'png', 'script']
-    exclude_paths_str = os.environ.get('AI_SAST_EXCLUDE_PATHS', '')
-    custom_exclude_keywords = [path.strip() for path in exclude_paths_str.split(',') if path.strip()]
-    
-    all_exclude_keywords = default_exclude_keywords + custom_exclude_keywords
-
-    if custom_exclude_keywords:
-        print(f"ℹ️  Applying custom exclusion keywords: {', '.join(custom_exclude_keywords)}")
+    # Example: "dist,build,vendor,docs/*.md"
+    # Every excluded file is named in the PR comment, even when there are no findings.
+    all_exclude_keywords = get_exclude_keywords()
     print(f"ℹ️  Full list of exclusion keywords: {', '.join(all_exclude_keywords)}")
 
     def should_be_excluded(file_path: str) -> bool:
@@ -293,16 +319,16 @@ def main():
     for change in changes:
         file_path = change.get('new_path')
 
-        if should_be_excluded(file_path):
-            excluded_files.append(file_path)
+        if change.get('deleted_file'):
             continue
-        
+
         # Check if the file matches any of the patterns
         if not any(fnmatch.fnmatch(file_path, pattern) for pattern in file_patterns):
             print(f"ℹ️  Skipping file with unsupported extension: {file_path}")
             continue
 
-        if change.get('deleted_file'):
+        if should_be_excluded(file_path):
+            excluded_files.append(file_path)
             continue
 
         diff = change.get('diff', '')
@@ -390,8 +416,16 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     scan_id = f"pr-{github_sha[:7] if github_sha else 'unknown'}-{timestamp}"
     
+    skipped_all = skipped_file_size + skipped_total_cap + skipped_file_cap
+
     if not scan_results:
         print("✅ No new code changes to scan (or all files excluded).")
+        coverage_notes = build_coverage_notes(excluded_files, skipped_all)
+        if coverage_notes:
+            write_pr_comment(append_coverage_notes(
+                f"⚠️ **{COMMENT_TITLE}**: No changed files were analyzed. The files below were not scanned.",
+                coverage_notes,
+            ))
         print("PR scan completed successfully!")
         return
     
@@ -470,37 +504,32 @@ def main():
     else:
         should_post_comment = vulns_to_validate_count > 0
 
-    if should_post_comment:
+    rejected_count = 0
+    if validated_vuln_ids is not None:
+        rejected_count = vulns_to_validate_count - len(validated_vuln_ids)
+    coverage_notes = build_coverage_notes(excluded_files, skipped_all, rejected_count)
+    # Unscanned files must always be visible on the PR, even without findings.
+    has_unscanned_files = bool(excluded_files or skipped_all)
+
+    if should_post_comment or has_unscanned_files:
+        if not should_post_comment:
+            if validated_vuln_ids is not None and vulns_to_validate_count > 0:
+                print("\nℹ️  No findings validated as true positive.")
+            else:
+                print(f"\nℹ️  No findings in configured severities ({', '.join(allowed_severities)}).")
+            print("ℹ️  Posting PR comment to disclose files that were not scanned.")
         print("\n💬 Generating markdown report for PR comment...")
         markdown_report = html_generator.generate_markdown_report(
             scan_results,
-            report_title="🤖 AI-SAST Security Scan",
+            report_title=COMMENT_TITLE,
             repo_url=repo_url,
             ref_name=github_ref_name,
             report_context_text="PR changes",
             validated_vuln_ids=validated_vuln_ids,
             validator_reasoning=validator_reasoning,
         )
-        
-        coverage_notes = []
-        if excluded_files:
-            excluded_sorted = sorted(set(excluded_files))
-            coverage_notes.append(f"**Excluded from scan ({len(excluded_sorted)} file(s), path keywords):** " + ", ".join(f"`{f}`" for f in excluded_sorted[:20]) + (" ..." if len(excluded_sorted) > 20 else ""))
-        skipped_all = skipped_file_size + skipped_total_cap + skipped_file_cap
-        if skipped_all:
-            coverage_notes.append(f"**Skipped due to size/count limits ({len(skipped_all)} file(s)):** " + ", ".join(f"`{f}`" for f in skipped_all[:20]) + (" ..." if len(skipped_all) > 20 else ""))
-        if validated_vuln_ids is not None:
-            rejected_count = vulns_to_validate_count - len(validated_vuln_ids)
-            if rejected_count > 0:
-                coverage_notes.append(f"**Rejected by validator as false positive:** {rejected_count} finding(s)")
-        if coverage_notes:
-            markdown_report += "\n\n### Scan coverage\n\n" + "\n\n".join(coverage_notes) + "\n"
-
-        # Save markdown report for GitHub Actions to use
-        with open('pr_comment.md', 'w') as f:
-            f.write(markdown_report)
-        print("✅ Markdown report saved to pr_comment.md")
-        print("   Use this file to post a PR comment in your workflow")
+        markdown_report = append_coverage_notes(markdown_report, coverage_notes)
+        write_pr_comment(markdown_report)
     else:
         if validated_vuln_ids is not None and vulns_to_validate_count > 0:
             print("\nℹ️  No findings validated as true positive; skipping PR comment.")

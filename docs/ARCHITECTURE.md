@@ -102,7 +102,7 @@ AI-SAST is an AI-powered static application security testing tool that combines 
 
 **Key Features:**
 - Configurable file extensions via `ai-sast-extensions.txt`
-- Smart exclusion patterns (test files, dependencies, etc.)
+- Exclusion patterns (dependency folders by default, plus `AI_SAST_EXCLUDE_PATHS`)
 - Rate limit handling
 - Support for both Vertex AI and Ollama backends
 
@@ -225,7 +225,7 @@ Developer reviews PR comment
 | `OLLAMA_BASE_URL` | Ollama API endpoint | `http://localhost:11434` |
 | `OLLAMA_MODEL` | Ollama model name | `qwen2.5-coder:14b` |
 | `AI_SAST_SEVERITY` | PR comment severity filter | `critical,high` |
-| `AI_SAST_EXCLUDE_PATHS` | Additional exclusion patterns | - |
+| `AI_SAST_EXCLUDE_PATHS` | Additional exclusion patterns (built-in defaults: `node_modules`, `.git`) | - |
 | `AI_SAST_CUSTOM_PROMPT` | Append to scanning prompt | - |
 | `AI_SAST_DB_PATH` | SQLite database location | `~/.ai-sast/scans.db` |
 
@@ -291,7 +291,7 @@ python -m src.main.pr_scan
 
 ### Optimization Strategies
 1. **Sequential scanning:** `--max-workers 1` (avoids rate limits)
-2. **Exclusion patterns:** Skip test files, dependencies
+2. **Exclusion patterns:** Skip dependency folders and operator-configured paths; excluded files are listed in the PR comment
 3. **File type filtering:** Only scan relevant languages
 4. **Local LLMs:** Ollama for unlimited requests
 5. **Smaller models:** Use `qwen2.5-coder:7b` for faster inference

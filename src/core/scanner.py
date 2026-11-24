@@ -86,6 +86,19 @@ def is_path_excluded(file_path: str, keywords: List[str]) -> bool:
             return True
     return False
 
+
+# Only dependency/VCS folders are excluded by default. Generic names such as
+# "test", "local", "log" or "script" are chosen by the PR author, so they must be
+# opted into explicitly via AI_SAST_EXCLUDE_PATHS.
+DEFAULT_EXCLUDE_KEYWORDS = ['node_modules', '.git']
+
+
+def get_exclude_keywords() -> List[str]:
+    """Default exclusion keywords plus comma-separated AI_SAST_EXCLUDE_PATHS."""
+    exclude_paths_str = os.environ.get('AI_SAST_EXCLUDE_PATHS', '')
+    custom = [path.strip() for path in exclude_paths_str.split(',') if path.strip()]
+    return DEFAULT_EXCLUDE_KEYWORDS + custom
+
 class SecurityScanner:
     """
     Security vulnerability scanner using Vertex AI
@@ -615,14 +628,7 @@ Use the exact file path as written above for that file. Then provide your analys
         # AI_SAST_EXCLUDE_PATHS: Comma-separated paths to exclude from scanning (optional)
         # Example: "dist,build,vendor,docs,*.min.js"
         # Example: "node_modules,target,coverage,*.test.js"
-        default_exclude_keywords = ['test', 'node_modules', 'e2e', 'cypress', 'local', 'jest', 'prettierrc', 'mock', 'log', 'png', 'script', 'mocks', '.git']
-        exclude_paths_str = os.environ.get('AI_SAST_EXCLUDE_PATHS', '')
-        custom_exclude_keywords = [path.strip() for path in exclude_paths_str.split(',') if path.strip()]
-        
-        all_exclude_keywords = default_exclude_keywords + custom_exclude_keywords
-
-        if custom_exclude_keywords:
-            print(f"ℹ️ Applying custom exclusion keywords: {', '.join(custom_exclude_keywords)}")
+        all_exclude_keywords = get_exclude_keywords()
         print(f"ℹ️ Full list of exclusion keywords: {', '.join(all_exclude_keywords)}")
 
         def should_be_excluded(file_path: str) -> bool:
@@ -825,17 +831,10 @@ Use the exact file path as written above for that file. Then provide your analys
             file_patterns = self._load_file_extensions()
         
         # Exclusion logic
-        default_exclude_keywords = ['test', 'node_modules', '.git']
-        exclude_paths_str = os.environ.get('AI_SAST_EXCLUDE_PATHS', '')
-        custom_exclude_keywords = [path.strip() for path in exclude_paths_str.split(',') if path.strip()]
-        all_exclude_keywords = default_exclude_keywords + custom_exclude_keywords
+        all_exclude_keywords = get_exclude_keywords()
 
         def should_be_excluded(file_path: str) -> bool:
-            path_lower = file_path.lower()
-            for keyword in all_exclude_keywords:
-                if keyword.lower() in path_lower:
-                    return True
-            return False
+            return is_path_excluded(os.path.relpath(file_path, directory_path), all_exclude_keywords)
 
         all_files: List[str] = []
         for pattern in file_patterns:

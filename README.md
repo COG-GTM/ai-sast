@@ -107,7 +107,7 @@ All configuration is driven by environment variables. The table below lists supp
 | `AI_SAST_BASE_BRANCH` | Branch that triggers PR scan; PRs targeting this branch are scanned. | `main` |
 | `AI_SAST_SEVERITY` | Comma-separated severities to include in PR comments (e.g. `critical,high,medium`). The validator runs only on findings in these severities. | `critical,high` |
 | `AI_SAST_UPDATE_SAME_PR_COMMENT` | When `true`, each PR scan run updates the same PR comment with the latest results instead of posting a new comment (reduces noise on multi-commit PRs). When `false` or unset, a new comment is posted every time (default). | `false` |
-| `AI_SAST_EXCLUDE_PATHS` | Comma-separated path keywords to exclude from scanning (e.g. `test,vendor,mock`). | — |
+| `AI_SAST_EXCLUDE_PATHS` | Comma-separated keywords to exclude from scanning, in addition to the built-in `node_modules` and `.git`. A plain keyword matches a whole folder name or name part (`vendor` matches `vendor/`, not `vendors-api.py`); a keyword with `/` matches a path prefix (`src/generated`); a keyword with `*` or `?` is a glob (`docs/*.md`). Prefer anchored paths: the PR author picks file names, so generic words like `test` or `script` let them skip the scan. Excluded and skipped files are always listed in the PR comment. | `node_modules,.git` (built in) |
 | `AI_SAST_PR_SCAN_BATCH_SIZE` | Number of files to send in one Vertex/Bedrock call. PR scan always uses batching (no option to turn off). | `10` |
 | `AI_SAST_PR_SCAN_BATCH_MAX_BYTES` | Max total bytes of added code per batch (avoids oversized requests). | `2097152` (2 MB) |
 | `AI_SAST_PR_SCAN_MAX_FILES` | Max number of files to scan per PR (DoS protection). Set to `0` for no limit. | `100` |

@@ -159,7 +159,7 @@ def main():
         excluded_files = getattr(scanner, 'excluded_files', [])
         if excluded_files:
             with open(text_report_file, 'a') as f:
-                f.write(f"\n\nExcluded from scan ({len(excluded_files)} file(s), path keywords):\n")
+                f.write(f"\n\nExcluded from scan ({len(excluded_files)} file(s), exclusion keywords):\n")
                 f.write("\n".join(f"- {p}" for p in excluded_files) + "\n")
         
         # Generate HTML report
