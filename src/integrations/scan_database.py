@@ -19,6 +19,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _reject_db_in_ci_checkout(db_path: str) -> None:
+    """Refuse a database inside the GitHub Actions workspace, where a scanned pull request can plant its own feedback."""
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        return
+    workspace = os.environ.get('GITHUB_WORKSPACE')
+    if not workspace:
+        return
+    db = Path(db_path).expanduser().resolve()
+    root = Path(workspace).resolve()
+    if db == root or root in db.parents:
+        raise ValueError(
+            f"AI_SAST_DB_PATH ({db_path}) is inside the checked-out workspace ({workspace}); "
+            "files there can come from the code being scanned. Point it outside the workspace, "
+            "e.g. $RUNNER_TEMP/ai-sast-db/scans.db."
+        )
+
+
 class ScanDatabase:
     """
     Local SQLite database for storing scan results and feedback.
@@ -46,6 +63,7 @@ class ScanDatabase:
                 ai_sast_dir.mkdir(exist_ok=True)
                 db_path = str(ai_sast_dir / 'scans.db')
         
+        _reject_db_in_ci_checkout(db_path)
         self.db_path = db_path
         self.is_configured = True
         self._init_database()

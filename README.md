@@ -115,7 +115,7 @@ All configuration is driven by environment variables. The table below lists supp
 | `AI_SAST_PR_SCAN_MAX_TOTAL_SIZE` | Max total bytes of added lines per PR (DoS protection). Once exceeded, remaining files are skipped. Set to `0` for no limit. | `5242880` (5 MB) |
 | `AI_SAST_CUSTOM_PROMPT` | Extra instructions appended to the scan prompt (e.g. focus on certain vuln types). | — |
 | `AI_SAST_STORE_FINDINGS` | When `true`, store scan findings (and validator results) in the database. | `false` |
-| `AI_SAST_DB_PATH` | Path to SQLite database for feedback and optional scan storage. | `~/.ai-sast/scans.db` |
+| `AI_SAST_DB_PATH` | Path to SQLite database for feedback and optional scan storage. In GitHub Actions it must be outside `GITHUB_WORKSPACE` (the bundled workflow uses `$RUNNER_TEMP/ai-sast-db/scans.db`). | `~/.ai-sast/scans.db` |
 | **Initial scan LLM** | | |
 | `AI_SAST_LLM` | LLM for the initial security scan: `vertex`, `bedrock`, or `ollama`. | `vertex` |
 | **Validator LLM** | | |

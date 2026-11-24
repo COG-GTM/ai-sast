@@ -195,7 +195,7 @@ This context helps the AI:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `AI_SAST_FEEDBACK_BACKEND` | No | `auto` | Backend selection: `sqlite`, `databricks`, or `auto` |
-| `AI_SAST_DB_PATH` | No | `~/.ai-sast/scans.db` | SQLite database path |
+| `AI_SAST_DB_PATH` | No | `~/.ai-sast/scans.db` | SQLite database path (in GitHub Actions, must be outside `GITHUB_WORKSPACE`) |
 | `AI_SAST_STORE_FINDINGS` | No | `false` | Store scan findings in database (set to `true` to enable) |
 | `AI_SAST_DATABRICKS_HOST` | For Databricks | - | Databricks workspace hostname |
 | `AI_SAST_DATABRICKS_HTTP_PATH` | For Databricks | - | SQL warehouse HTTP path |
