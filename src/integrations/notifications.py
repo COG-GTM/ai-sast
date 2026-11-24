@@ -15,8 +15,36 @@ import urllib.request
 import urllib.error
 import hmac
 import hashlib
+import re
 
 logger = logging.getLogger(__name__)
+
+MAX_ALERT_FIELD_LENGTH = 500
+
+_MARKDOWN_SPECIAL_CHARS = re.compile(r'([\\`*_~|\[\]()<>#@])')
+
+
+def _clip(value: Any, limit: int = MAX_ALERT_FIELD_LENGTH) -> str:
+    """Convert an untrusted value to a single bounded string."""
+    text = 'N/A' if value is None else str(value)
+    if len(text) > limit:
+        text = text[:limit - 1] + '…'
+    return text
+
+
+def _escape_angle_brackets(value: Any) -> str:
+    """Escape &, < and > so Slack mrkdwn and Teams cards cannot form links or mentions."""
+    return (
+        _clip(value)
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+    )
+
+
+def _escape_markdown(value: Any) -> str:
+    """Backslash-escape markdown syntax (links, mentions, emphasis) for Discord."""
+    return _MARKDOWN_SPECIAL_CHARS.sub(r'\\\1', _clip(value))
 
 
 class WebhookClient:
@@ -223,7 +251,7 @@ class WebhookClient:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"🤖 AI-SAST Scan Complete: {repo}"
+                    "text": f"🤖 AI-SAST Scan Complete: {_clip(repo, 120)}"
                 }
             },
             {
@@ -265,6 +293,13 @@ class WebhookClient:
         pr_num = event_data['pr_number']
         
         pr_text = f"PR #{pr_num}" if pr_num else "Repository"
+        details = (
+            f"*Repository:* {_escape_angle_brackets(repo)}\n"
+            f"*{pr_text}*\n"
+            f"*Severity:* {_escape_angle_brackets(vuln['severity'])}\n"
+            f"*Issue:* {_escape_angle_brackets(vuln['issue'])}\n"
+            f"*File:* {_escape_angle_brackets(vuln['file'])}"
+        )
         
         return {
             "text": f":rotating_light: *CRITICAL VULNERABILITY DETECTED* :rotating_light:",
@@ -280,7 +315,7 @@ class WebhookClient:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Repository:* {repo}\n*{pr_text}*\n*Severity:* {vuln['severity']}\n*Issue:* {vuln['issue']}\n*File:* {vuln['file']}"
+                        "text": details
                     }
                 }
             ],
@@ -336,13 +371,14 @@ class WebhookClient:
             "summary": "Critical Vulnerability Detected",
             "sections": [{
                 "activityTitle": "🚨 CRITICAL SECURITY ALERT",
-                "activitySubtitle": repo,
+                "activitySubtitle": _escape_angle_brackets(repo),
                 "facts": [
-                    {"name": "Severity", "value": vuln['severity']},
-                    {"name": "Issue", "value": vuln['issue']},
-                    {"name": "File", "value": vuln['file']},
-                    {"name": "CVSS", "value": vuln.get('cvss_vector', 'N/A')}
-                ]
+                    {"name": "Severity", "value": _escape_angle_brackets(vuln['severity'])},
+                    {"name": "Issue", "value": _escape_angle_brackets(vuln['issue'])},
+                    {"name": "File", "value": _escape_angle_brackets(vuln['file'])},
+                    {"name": "CVSS", "value": _escape_angle_brackets(vuln.get('cvss_vector'))}
+                ],
+                "markdown": False
             }]
         }
     
@@ -358,7 +394,7 @@ class WebhookClient:
         embed = {
             "embeds": [{
                 "title": f"🤖 AI-SAST Scan Complete",
-                "description": f"**{repo}** - {pr_text}",
+                "description": f"**{_escape_markdown(repo)}** - {pr_text}",
                 "color": color,
                 "fields": [
                     {"name": "Critical", "value": str(summary.get('critical', 0)), "inline": True},
@@ -368,7 +404,8 @@ class WebhookClient:
                     {"name": "Total Issues", "value": str(total_issues), "inline": False}
                 ],
                 "timestamp": event_data['timestamp']
-            }]
+            }],
+            "allowed_mentions": {"parse": []}
         }
         
         if event_data.get('report_url'):
@@ -384,15 +421,16 @@ class WebhookClient:
         return {
             "embeds": [{
                 "title": "🚨 CRITICAL SECURITY ALERT",
-                "description": repo,
+                "description": _escape_markdown(repo),
                 "color": 0xFF0000,
                 "fields": [
-                    {"name": "Severity", "value": vuln['severity'], "inline": True},
-                    {"name": "Issue", "value": vuln['issue'], "inline": False},
-                    {"name": "File", "value": vuln['file'], "inline": False}
+                    {"name": "Severity", "value": _escape_markdown(vuln['severity']), "inline": True},
+                    {"name": "Issue", "value": _escape_markdown(vuln['issue']), "inline": False},
+                    {"name": "File", "value": _escape_markdown(vuln['file']), "inline": False}
                 ],
                 "timestamp": event_data['timestamp']
-            }]
+            }],
+            "allowed_mentions": {"parse": []}
         }
     
     def _send_webhook(self, payload: Dict) -> bool:
