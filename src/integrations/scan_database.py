@@ -16,6 +16,8 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .repo_identity import normalize_repo_identifier, repository_match_values
+
 logger = logging.getLogger(__name__)
 
 
@@ -286,14 +288,17 @@ class ScanDatabase:
     ) -> List[Dict]:
         """Get false positive feedback for a project"""
         try:
-            project_id = self._extract_project_identifier(repo_url)
+            repo_values = repository_match_values(repo_url)
+            if not repo_values:
+                return []
+            placeholders = ', '.join('?' for _ in repo_values)
             cutoff_date = (datetime.now() - timedelta(days=days_back)).isoformat()
             
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT 
                     timestamp as ts,
                     vuln_id,
@@ -307,11 +312,11 @@ class ScanDatabase:
                 FROM feedback
                 WHERE 
                     status = 'false_positive'
-                    AND (repository LIKE ? OR repository LIKE ?)
+                    AND LOWER(repository) IN ({placeholders})
                     AND timestamp >= ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            ''', (f'%{project_id}%', f'{repo_url}%', cutoff_date, limit))
+            ''', (*repo_values, cutoff_date, limit))
             
             results = cursor.fetchall()
             conn.close()
@@ -328,14 +333,17 @@ class ScanDatabase:
     ) -> List[Dict]:
         """Get confirmed vulnerabilities for a project"""
         try:
-            project_id = self._extract_project_identifier(repo_url)
+            repo_values = repository_match_values(repo_url)
+            if not repo_values:
+                return []
+            placeholders = ', '.join('?' for _ in repo_values)
             cutoff_date = (datetime.now() - timedelta(days=days_back)).isoformat()
             
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT 
                     timestamp as ts,
                     vuln_id,
@@ -349,11 +357,11 @@ class ScanDatabase:
                 FROM feedback
                 WHERE 
                     status = 'confirmed_vulnerability'
-                    AND (repository LIKE ? OR repository LIKE ?)
+                    AND LOWER(repository) IN ({placeholders})
                     AND timestamp >= ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            ''', (f'%{project_id}%', f'{repo_url}%', cutoff_date, limit))
+            ''', (*repo_values, cutoff_date, limit))
             
             results = cursor.fetchall()
             conn.close()
@@ -363,10 +371,8 @@ class ScanDatabase:
             return []
     
     def _extract_project_identifier(self, repo_url: str) -> str:
-        """Extract project name from URL"""
-        url = repo_url.replace('https://', '').replace('http://', '').rstrip('/')
-        parts = url.split('/')
-        return parts[-1] if parts else repo_url
+        """Normalize repository URL to a host/owner/repo key"""
+        return normalize_repo_identifier(repo_url)
     
     def format_feedback_for_context(
         self,
@@ -407,10 +413,9 @@ class ScanDatabase:
             cursor = conn.cursor()
             
             if repo_url:
-                project_id = self._extract_project_identifier(repo_url)
-                # Use DISTINCT to avoid double-counting when both LIKE patterns match
-                where = "WHERE (repository LIKE ? OR repository LIKE ?)"
-                params = (f'%{project_id}%', f'{repo_url}%')
+                repo_values = repository_match_values(repo_url) or ['']
+                where = f"WHERE LOWER(repository) IN ({', '.join('?' for _ in repo_values)})"
+                params = tuple(repo_values)
             else:
                 where = ""
                 params = ()
