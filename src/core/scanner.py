@@ -316,23 +316,9 @@ Format your response for each finding as:
             total = len(false_positives) + len(confirmed_vulnerabilities)
             if total > 0:
                 backend_name = type(self.feedback_client).__name__
-                print(f"✅ Loaded {total} feedback record(s) from {backend_name}. Sending to Vertex AI:")
-                if false_positives:
-                    print(f"   False positives ({len(false_positives)}):")
-                    for i, fp in enumerate(false_positives[:20], 1):
-                        issue = (fp.get("issue") or "N/A")[:60]
-                        path = (fp.get("file_path") or "N/A")[:50]
-                        print(f"     {i}. [{path}] {issue}")
-                    if len(false_positives) > 20:
-                        print(f"     ... and {len(false_positives) - 20} more")
-                if confirmed_vulnerabilities:
-                    print(f"   Confirmed vulnerabilities ({len(confirmed_vulnerabilities)}):")
-                    for i, cv in enumerate(confirmed_vulnerabilities[:20], 1):
-                        issue = (cv.get("issue") or "N/A")[:60]
-                        path = (cv.get("file_path") or "N/A")[:50]
-                        print(f"     {i}. [{path}] {issue}")
-                    if len(confirmed_vulnerabilities) > 20:
-                        print(f"     ... and {len(confirmed_vulnerabilities) - 20} more")
+                print(f"✅ Loaded {total} feedback record(s) from {backend_name} "
+                      f"({len(false_positives)} false positive(s), "
+                      f"{len(confirmed_vulnerabilities)} confirmed vulnerabilit(ies)).")
             
             # Format context
             context = self.feedback_client.format_feedback_for_context(
@@ -365,7 +351,7 @@ Format your response for each finding as:
             jira_context_formatted = f"\n\nConsider the following context from the vulnerability database:\n\n---\n{self.jira_context}\n---"
         
         # Retrieve feedback from DB (SQLite/Databricks) and include in Vertex AI prompt for accuracy
-        # (List of records was already printed when loaded in _get_feedback_context.)
+        # (Only record counts are printed; feedback text stays out of the job log.)
         feedback_context_formatted = ""
         if self.feedback_context:
             feedback_context_formatted = f"\n\n## Feedback from Past Scans\n\n{self.feedback_context}\n\nPlease use this feedback to improve accuracy. Avoid reporting issues similar to the false positives listed above, and pay special attention to patterns similar to confirmed vulnerabilities.\n\n---"

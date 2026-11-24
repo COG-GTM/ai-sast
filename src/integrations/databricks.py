@@ -14,6 +14,8 @@ import logging
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
+from .repo_identity import normalize_repo_identifier, repository_match_values
+
 logger = logging.getLogger(__name__)
 
 
@@ -255,8 +257,10 @@ class DatabricksClient:
                 return []
         
         try:
-            # Extract project identifier from repo URL
             project_identifier = self._extract_project_identifier(repo_url)
+            repo_values = repository_match_values(repo_url)
+            if not repo_values:
+                return []
             
             # Calculate date filter
             cutoff_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
@@ -283,16 +287,14 @@ class DatabricksClient:
                 FROM {self.catalog}.{self.schema}.{self.table}
                 WHERE 
                     status = 'False Positive'
-                    AND (
-                        repository LIKE '%{project_identifier}%'
-                        OR repository LIKE '{repo_url}%'
-                    )
-                    AND timestamp >= '{cutoff_date}'
+                    AND LOWER(repository) IN ({', '.join('?' for _ in repo_values)})
+                    AND timestamp >= ?
                 ORDER BY timestamp DESC
-                LIMIT {limit}
+                LIMIT {int(limit)}
             """
+            params = [*repo_values, cutoff_date]
             
-            self.cursor.execute(feedback_query)
+            self.cursor.execute(feedback_query, params)
             results = self.cursor.fetchall()
             logger.info(f"  Found {len(results)} false positive record(s)")
             
@@ -343,6 +345,9 @@ class DatabricksClient:
         
         try:
             project_identifier = self._extract_project_identifier(repo_url)
+            repo_values = repository_match_values(repo_url)
+            if not repo_values:
+                return []
             cutoff_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             
             logger.info(f"Querying confirmed vulnerabilities for project:")
@@ -365,16 +370,14 @@ class DatabricksClient:
                 FROM {self.catalog}.{self.schema}.{self.table}
                 WHERE 
                     status = 'Confirmed'
-                    AND (
-                        repository LIKE '%{project_identifier}%'
-                        OR repository LIKE '{repo_url}%'
-                    )
-                    AND timestamp >= '{cutoff_date}'
+                    AND LOWER(repository) IN ({', '.join('?' for _ in repo_values)})
+                    AND timestamp >= ?
                 ORDER BY timestamp DESC
-                LIMIT {limit}
+                LIMIT {int(limit)}
             """
+            params = [*repo_values, cutoff_date]
             
-            self.cursor.execute(query)
+            self.cursor.execute(query, params)
             results = self.cursor.fetchall()
             logger.info(f"  Found {len(results)} confirmed vulnerability record(s)")
             
@@ -404,17 +407,9 @@ class DatabricksClient:
             repo_url: Full repository URL (e.g., https://github.com/org/project)
             
         Returns:
-            Project identifier (e.g., project name)
+            Normalized host/owner/repo key (e.g., github.com/org/project)
         """
-        # Remove protocol and trailing slashes
-        url = repo_url.replace('https://', '').replace('http://', '').rstrip('/')
-        
-        # Get the last part of the URL as project identifier
-        parts = url.split('/')
-        if len(parts) > 0:
-            return parts[-1]
-        
-        return repo_url
+        return normalize_repo_identifier(repo_url)
     
     def format_feedback_for_context(
         self,
@@ -470,17 +465,7 @@ class DatabricksClient:
                 context_parts.append(f"   - **File**: {file_path}")
                 context_parts.append(f"   - **Severity**: {severity}")
         
-        formatted_result = '\n'.join(context_parts) if context_parts else ""
-        
-        # Print formatted feedback for debugging
-        if formatted_result:
-            print("\n" + "="*80)
-            print("FEEDBACK CONTEXT FOR AI MODEL:")
-            print("="*80)
-            print(formatted_result[:500] + "..." if len(formatted_result) > 500 else formatted_result)
-            print("="*80 + "\n")
-        
-        return formatted_result
+        return '\n'.join(context_parts) if context_parts else ""
 
 
 def main():
