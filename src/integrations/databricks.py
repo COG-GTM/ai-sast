@@ -10,11 +10,24 @@ Configure via environment variables to connect to your Databricks workspace.
 """
 
 import os
+import re
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+_LIKE_ESCAPE_CHAR = '!'
+
+
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards so the value matches literally (used with ESCAPE '!')."""
+    return (
+        value.replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+        .replace('%', _LIKE_ESCAPE_CHAR + '%')
+        .replace('_', _LIKE_ESCAPE_CHAR + '_')
+    )
 
 
 class DatabricksClient:
@@ -67,6 +80,12 @@ class DatabricksClient:
         if not all([self.server_hostname, self.http_path, self.access_token, 
                     self.catalog, self.schema, self.table]):
             logger.info("ℹ️  Databricks not fully configured. Feedback fetching will be skipped.")
+            self.is_configured = False
+        elif not all(_IDENTIFIER_RE.match(name) for name in (self.catalog, self.schema, self.table)):
+            logger.warning(
+                "⚠️  Databricks catalog/schema/table names must match [A-Za-z_][A-Za-z0-9_]*. "
+                "Feedback fetching will be skipped."
+            )
             self.is_configured = False
         else:
             self.is_configured = True
@@ -284,15 +303,20 @@ class DatabricksClient:
                 WHERE 
                     status = 'False Positive'
                     AND (
-                        repository LIKE '%{project_identifier}%'
-                        OR repository LIKE '{repo_url}%'
+                        repository LIKE ? ESCAPE '{_LIKE_ESCAPE_CHAR}'
+                        OR repository LIKE ? ESCAPE '{_LIKE_ESCAPE_CHAR}'
                     )
-                    AND timestamp >= '{cutoff_date}'
+                    AND timestamp >= ?
                 ORDER BY timestamp DESC
-                LIMIT {limit}
+                LIMIT {int(limit)}
             """
+            params = (
+                f"%{_escape_like(project_identifier)}%",
+                f"{_escape_like(repo_url)}%",
+                cutoff_date,
+            )
             
-            self.cursor.execute(feedback_query)
+            self.cursor.execute(feedback_query, params)
             results = self.cursor.fetchall()
             logger.info(f"  Found {len(results)} false positive record(s)")
             
@@ -366,15 +390,20 @@ class DatabricksClient:
                 WHERE 
                     status = 'Confirmed'
                     AND (
-                        repository LIKE '%{project_identifier}%'
-                        OR repository LIKE '{repo_url}%'
+                        repository LIKE ? ESCAPE '{_LIKE_ESCAPE_CHAR}'
+                        OR repository LIKE ? ESCAPE '{_LIKE_ESCAPE_CHAR}'
                     )
-                    AND timestamp >= '{cutoff_date}'
+                    AND timestamp >= ?
                 ORDER BY timestamp DESC
-                LIMIT {limit}
+                LIMIT {int(limit)}
             """
+            params = (
+                f"%{_escape_like(project_identifier)}%",
+                f"{_escape_like(repo_url)}%",
+                cutoff_date,
+            )
             
-            self.cursor.execute(query)
+            self.cursor.execute(query, params)
             results = self.cursor.fetchall()
             logger.info(f"  Found {len(results)} confirmed vulnerability record(s)")
             

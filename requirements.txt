@@ -22,7 +22,7 @@ grpcio-status>=1.54.0
 
 # Databricks feedback loop (optional - use for enterprise deployments)
 # For local/small teams, SQLite is used by default (no installation needed)
-# databricks-sql-connector>=2.9.0
+# databricks-sql-connector>=3.0.0  # native ? parameter markers
 
 # Development and testing
 pytest>=7.0.0
