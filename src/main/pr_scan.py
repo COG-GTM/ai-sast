@@ -30,12 +30,37 @@ except ImportError:
     WebhookClient = None
 
 
+_HUNK_HEADER_RE = re.compile(r'^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@')
+
+
 def parse_added_lines_from_diff(diff: str) -> str:
-    """Parses a unified diff string and extracts only the added lines."""
+    """Parses a unified diff string and extracts only the added lines.
+
+    File headers (``---``/``+++``) are only recognised outside a hunk; inside
+    a hunk the ``@@`` line counts decide where it ends, so an added line whose
+    content starts with ``++`` (diff line ``+++...``) is kept.
+    """
     added_lines = []
+    old_remaining = new_remaining = 0
     for line in diff.split('\n'):
-        if line.startswith('+') and not line.startswith('+++'):
-            added_lines.append(line[1:])  # Append line content without the '+'
+        if old_remaining > 0 or new_remaining > 0:
+            if line.startswith('+'):
+                added_lines.append(line[1:])
+                new_remaining -= 1
+            elif line.startswith('-'):
+                old_remaining -= 1
+            elif line.startswith(' ') or line == '':
+                old_remaining -= 1
+                new_remaining -= 1
+            elif line.startswith('\\'):
+                pass  # "\ No newline at end of file"
+            else:
+                old_remaining = new_remaining = 0
+            continue
+        match = _HUNK_HEADER_RE.match(line)
+        if match:
+            old_remaining = int(match.group(1) or 1)
+            new_remaining = int(match.group(2) or 1)
     return '\n'.join(added_lines)
 
 
