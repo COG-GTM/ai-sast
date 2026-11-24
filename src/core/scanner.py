@@ -376,18 +376,19 @@ Format your response for each finding as:
         # Create the final prompt using the custom instructions from the instance
         custom_instructions_formatted = f"\n\n{self.custom_instructions}" if self.custom_instructions else ""
         
-        # Update the prompt to include combined context
-        prompt_with_context = self.DEFAULT_PROMPT.replace(
-            "{custom_instructions}",
-            f"{combined_context}{custom_instructions_formatted}"
-        )
-        
-        prompt = prompt_with_context.format(
-            file_path=file_path,
-            language=language,
-            code_content=code_content,
-            custom_instructions=""  # Already included above
-        )
+        # Stored feedback/Jira/custom text is passed as a format value, never as template text,
+        # so braces in it are not parsed as placeholders.
+        try:
+            prompt = self.DEFAULT_PROMPT.format(
+                file_path=file_path,
+                language=language,
+                code_content=code_content,
+                custom_instructions=f"{combined_context}{custom_instructions_formatted}"
+            )
+        except (KeyError, IndexError, ValueError) as e:
+            print(f"❌ Failed to build scan prompt for {file_path}: {type(e).__name__}: {e}")
+            print("Failing job because the prompt template could not be rendered.")
+            sys.exit(1)
         
         max_retries = 5
         backoff_factor = 3  # Increased from 2 to 3 for longer waits
