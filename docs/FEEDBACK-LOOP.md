@@ -152,7 +152,7 @@ Feedback is stored in one of two backends:
 
 During future scans, the system:
 
-1. **Queries** the database for historical feedback from the same repository
+1. **Queries** the database for historical feedback from the same repository (exact match on the canonical `host/owner/repo` identifier, e.g. `github.com/acme/app`; feedback for `acme/app-backend` or `other-org/app` is never included)
 2. **Retrieves**:
    - False positives (last 90 days, max 100)
    - Confirmed vulnerabilities (last 90 days, max 100)

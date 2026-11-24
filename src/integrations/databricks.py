@@ -14,6 +14,11 @@ import logging
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
+try:
+    from .repo_identity import canonical_repository, repository_aliases
+except ImportError:
+    from repo_identity import canonical_repository, repository_aliases
+
 logger = logging.getLogger(__name__)
 
 
@@ -151,7 +156,7 @@ class DatabricksClient:
             """
             
             params = (
-                repo_url,
+                canonical_repository(repo_url),
                 pr_number,
                 file_path,
                 vulnerability_id,
@@ -255,15 +260,15 @@ class DatabricksClient:
                 return []
         
         try:
-            # Extract project identifier from repo URL
-            project_identifier = self._extract_project_identifier(repo_url)
+            aliases = repository_aliases(repo_url)
+            placeholders = ', '.join('?' * len(aliases))
             
             # Calculate date filter
             cutoff_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             
             logger.info(f"Querying false positives for project:")
             logger.info(f"  Repo URL: {repo_url}")
-            logger.info(f"  Project identifier: {project_identifier}")
+            logger.info(f"  Repository: {aliases[0]}")
             logger.info(f"  Lookback: last {days_back} days (from {cutoff_date})")
             logger.info(f"  Table: {self.catalog}.{self.schema}.{self.table}")
             
@@ -283,16 +288,14 @@ class DatabricksClient:
                 FROM {self.catalog}.{self.schema}.{self.table}
                 WHERE 
                     status = 'False Positive'
-                    AND (
-                        repository LIKE '%{project_identifier}%'
-                        OR repository LIKE '{repo_url}%'
-                    )
-                    AND timestamp >= '{cutoff_date}'
+                    AND repository IN ({placeholders})
+                    AND timestamp >= ?
                 ORDER BY timestamp DESC
-                LIMIT {limit}
+                LIMIT {int(limit)}
             """
+            params = (*aliases, cutoff_date)
             
-            self.cursor.execute(feedback_query)
+            self.cursor.execute(feedback_query, params)
             results = self.cursor.fetchall()
             logger.info(f"  Found {len(results)} false positive record(s)")
             
@@ -313,7 +316,6 @@ class DatabricksClient:
         except Exception as e:
             logger.error(f"Error querying false positives: {e}")
             logger.debug(f"  Project URL: {repo_url}")
-            logger.debug(f"  Project ID: {project_identifier}")
             return []
     
     def get_confirmed_vulnerabilities_for_project(
@@ -342,12 +344,13 @@ class DatabricksClient:
                 return []
         
         try:
-            project_identifier = self._extract_project_identifier(repo_url)
+            aliases = repository_aliases(repo_url)
+            placeholders = ', '.join('?' * len(aliases))
             cutoff_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
             
             logger.info(f"Querying confirmed vulnerabilities for project:")
             logger.info(f"  Repo URL: {repo_url}")
-            logger.info(f"  Project identifier: {project_identifier}")
+            logger.info(f"  Repository: {aliases[0]}")
             logger.info(f"  Lookback: last {days_back} days (from {cutoff_date})")
             
             # Query for confirmed vulnerability records
@@ -365,16 +368,14 @@ class DatabricksClient:
                 FROM {self.catalog}.{self.schema}.{self.table}
                 WHERE 
                     status = 'Confirmed'
-                    AND (
-                        repository LIKE '%{project_identifier}%'
-                        OR repository LIKE '{repo_url}%'
-                    )
-                    AND timestamp >= '{cutoff_date}'
+                    AND repository IN ({placeholders})
+                    AND timestamp >= ?
                 ORDER BY timestamp DESC
-                LIMIT {limit}
+                LIMIT {int(limit)}
             """
+            params = (*aliases, cutoff_date)
             
-            self.cursor.execute(query)
+            self.cursor.execute(query, params)
             results = self.cursor.fetchall()
             logger.info(f"  Found {len(results)} confirmed vulnerability record(s)")
             
@@ -395,26 +396,6 @@ class DatabricksClient:
         except Exception as e:
             logger.error(f"Error querying confirmed vulnerabilities: {e}")
             return []
-    
-    def _extract_project_identifier(self, repo_url: str) -> str:
-        """
-        Extract project identifier from repository URL
-        
-        Args:
-            repo_url: Full repository URL (e.g., https://github.com/org/project)
-            
-        Returns:
-            Project identifier (e.g., project name)
-        """
-        # Remove protocol and trailing slashes
-        url = repo_url.replace('https://', '').replace('http://', '').rstrip('/')
-        
-        # Get the last part of the URL as project identifier
-        parts = url.split('/')
-        if len(parts) > 0:
-            return parts[-1]
-        
-        return repo_url
     
     def format_feedback_for_context(
         self,

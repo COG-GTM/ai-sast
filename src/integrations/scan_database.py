@@ -16,6 +16,11 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
 
+try:
+    from .repo_identity import canonical_repository, repository_aliases
+except ImportError:
+    from repo_identity import canonical_repository, repository_aliases
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,7 +152,7 @@ class ScanDatabase:
                  scan_type, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                scan_id, timestamp, repo_url, pr_number, file_path, vulnerability_id,
+                scan_id, timestamp, canonical_repository(repo_url), pr_number, file_path, vulnerability_id,
                 issue, severity, cvss_vector or "", location or "", description or "",
                 risk or "", fix or "", scan_type, timestamp
             ))
@@ -175,7 +180,7 @@ class ScanDatabase:
                 UPDATE scan_results
                 SET validator_llm = ?, validator_result = ?
                 WHERE scan_id = ? AND repository = ? AND vuln_id = ?
-            ''', (validator_llm, validator_result, scan_id, repo_url, vuln_id))
+            ''', (validator_llm, validator_result, scan_id, canonical_repository(repo_url), vuln_id))
             conn.commit()
             updated = cursor.rowcount > 0
             conn.close()
@@ -239,7 +244,7 @@ class ScanDatabase:
                  status, feedback_text, cvss_vector, location, user, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                timestamp, repo_url, pr_number, file_path, vulnerability_id,
+                timestamp, canonical_repository(repo_url), pr_number, file_path, vulnerability_id,
                 issue, severity, status, feedback or "", cvss_vector or "",
                 location or "", user or "", timestamp
             ))
@@ -286,14 +291,15 @@ class ScanDatabase:
     ) -> List[Dict]:
         """Get false positive feedback for a project"""
         try:
-            project_id = self._extract_project_identifier(repo_url)
+            aliases = repository_aliases(repo_url)
+            placeholders = ', '.join('?' * len(aliases))
             cutoff_date = (datetime.now() - timedelta(days=days_back)).isoformat()
             
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT 
                     timestamp as ts,
                     vuln_id,
@@ -307,11 +313,11 @@ class ScanDatabase:
                 FROM feedback
                 WHERE 
                     status = 'false_positive'
-                    AND (repository LIKE ? OR repository LIKE ?)
+                    AND repository IN ({placeholders})
                     AND timestamp >= ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            ''', (f'%{project_id}%', f'{repo_url}%', cutoff_date, limit))
+            ''', (*aliases, cutoff_date, limit))
             
             results = cursor.fetchall()
             conn.close()
@@ -328,14 +334,15 @@ class ScanDatabase:
     ) -> List[Dict]:
         """Get confirmed vulnerabilities for a project"""
         try:
-            project_id = self._extract_project_identifier(repo_url)
+            aliases = repository_aliases(repo_url)
+            placeholders = ', '.join('?' * len(aliases))
             cutoff_date = (datetime.now() - timedelta(days=days_back)).isoformat()
             
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT 
                     timestamp as ts,
                     vuln_id,
@@ -349,11 +356,11 @@ class ScanDatabase:
                 FROM feedback
                 WHERE 
                     status = 'confirmed_vulnerability'
-                    AND (repository LIKE ? OR repository LIKE ?)
+                    AND repository IN ({placeholders})
                     AND timestamp >= ?
                 ORDER BY timestamp DESC
                 LIMIT ?
-            ''', (f'%{project_id}%', f'{repo_url}%', cutoff_date, limit))
+            ''', (*aliases, cutoff_date, limit))
             
             results = cursor.fetchall()
             conn.close()
@@ -361,12 +368,6 @@ class ScanDatabase:
         except Exception as e:
             logger.error(f"Error querying confirmed vulnerabilities: {e}")
             return []
-    
-    def _extract_project_identifier(self, repo_url: str) -> str:
-        """Extract project name from URL"""
-        url = repo_url.replace('https://', '').replace('http://', '').rstrip('/')
-        parts = url.split('/')
-        return parts[-1] if parts else repo_url
     
     def format_feedback_for_context(
         self,
@@ -407,10 +408,9 @@ class ScanDatabase:
             cursor = conn.cursor()
             
             if repo_url:
-                project_id = self._extract_project_identifier(repo_url)
-                # Use DISTINCT to avoid double-counting when both LIKE patterns match
-                where = "WHERE (repository LIKE ? OR repository LIKE ?)"
-                params = (f'%{project_id}%', f'{repo_url}%')
+                aliases = repository_aliases(repo_url)
+                where = f"WHERE repository IN ({', '.join('?' * len(aliases))})"
+                params = tuple(aliases)
             else:
                 where = ""
                 params = ()
