@@ -128,7 +128,7 @@ All configuration is driven by environment variables. The table below lists supp
 | `GOOGLE_LOCATION` | Vertex AI region (e.g. `us-central1`). | `us-central1` |
 | `GEMINI_MODEL` | Gemini model for initial scan when `AI_SAST_LLM=vertex`. | `gemini-2.5-pro` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account key file (alternative to `GOOGLE_TOKEN`). | — |
-| `GOOGLE_TOKEN` | Raw service account JSON or access token (alternative to file path). | — |
+| `GOOGLE_TOKEN` | Raw or base64 service account JSON, or access token (alternative to file path). The key is kept in memory and never written to disk. | — |
 | **AWS Bedrock** | | |
 | `AWS_REGION` | AWS region for Bedrock (e.g. `us-east-1`). | `us-east-1` |
 | `BEDROCK_MODEL_ID` | Claude model for initial scan when `AI_SAST_LLM=bedrock`. | `anthropic.claude-opus-4-5-20251101-v1:0` |

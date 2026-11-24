@@ -30,51 +30,53 @@ class VertexAIClient:
         self.project_id = project_id
         self.location = location
         
+        credentials = None
         google_token = os.getenv("GOOGLE_TOKEN")
         if google_token:
-            self._setup_token_authentication(google_token)
+            credentials = self._setup_token_authentication(google_token)
             print(f"🔑 Using Google Cloud authentication token from GOOGLE_TOKEN")
         
         self._genai_client = Client(
             vertexai=True,
             project=project_id,
             location=location,
+            credentials=credentials,
         )
-        aiplatform.init(project=project_id, location=location)
+        aiplatform.init(project=project_id, location=location, credentials=credentials)
         
         print(f"✅ Vertex AI client initialized for project: {project_id}")
 
-    def _setup_token_authentication(self, token: str):
+    def _setup_token_authentication(self, token: str) -> Optional[Any]:
         """
-        Set up authentication using a Google Cloud token
+        Build in-memory credentials from a Google Cloud token.
+
+        The service account key is never written to disk.
         
         Args:
-            token: Google Cloud authentication token (service account key JSON or access token)
+            token: Google Cloud authentication token (service account key JSON,
+                base64-encoded service account key JSON, or access token)
+
+        Returns:
+            Service account credentials, or None if the token is not a service account key
         """
-        import tempfile
         import base64
-        import json
         import binascii
+        from google.oauth2 import service_account
         
         try:
-            json.loads(token)
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                f.write(token)
-                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = f.name
-                print(f"📝 Created temporary credentials file: {f.name}")
-                
+            info = json.loads(token)
         except json.JSONDecodeError:
             try:
-                decoded = base64.b64decode(token).decode('utf-8')
-                json.loads(decoded)
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                    f.write(decoded)
-                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = f.name
-                    print(f"📝 Created temporary credentials file from base64: {f.name}")
-                    
+                info = json.loads(base64.b64decode(token).decode('utf-8'))
             except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError):
                 print(f"🔑 Using token as access token (limited functionality)")
-                pass
+                return None
+
+        credentials = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        print(f"📝 Loaded service account credentials in memory")
+        return credentials
 
     def generate_text(self, prompt: str, model_name: str = "gemini-2.5-flash",
                      max_output_tokens: int = 1024, temperature: float = 0.2) -> str:
