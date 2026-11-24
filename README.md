@@ -139,7 +139,7 @@ All configuration is driven by environment variables. The table below lists supp
 | `JIRA_URL` | Jira server URL (e.g. `https://your.atlassian.net`). | — |
 | `JIRA_USERNAME` | Jira user email. | — |
 | `JIRA_API_TOKEN` | Jira API token (e.g. from id.atlassian.com). | — |
-| `JIRA_JQL_QUERY` | JQL query to fetch vulnerability tickets for context. | — |
+| `JIRA_JQL_QUERY` | JQL query to fetch vulnerability tickets for context. Ticket text is passed to the model as untrusted, delimited reference data (summary ≤120 chars, description ≤150 chars, markup and line breaks removed); still prefer a query limited to trusted reporters, e.g. `project = SECURITY AND status != Closed AND reporter in membersOf("security-team")`. | — |
 | **Feedback backend (Databricks)** | | |
 | `AI_SAST_FEEDBACK_BACKEND` | Set to `databricks` to use Databricks instead of SQLite for feedback. | (SQLite) |
 | `AI_SAST_DATABRICKS_HOST` | Databricks workspace hostname. | — |

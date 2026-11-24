@@ -7,9 +7,39 @@ Configure via environment variables to connect to your Jira server.
 """
 
 import os
+import re
 from typing import Optional, List, Dict, Any, cast
 from jira import JIRA, JIRAError
 from jira.resources import Issue
+
+
+SUMMARY_MAX_CHARS = 120
+DESCRIPTION_MAX_CHARS = 150
+
+_ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[0-9]+$")
+_INVISIBLE_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
+_MARKUP_CHARS_RE = re.compile(r"[`*_#<>|~\[\]{}\\]")
+_RULE_RE = re.compile(r"[-=]{3,}")
+
+
+def sanitize_ticket_text(value: Any, max_chars: int) -> str:
+    """Flatten untrusted Jira text to one short line with no markup or line breaks."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    text = _INVISIBLE_CHARS_RE.sub(" ", text)
+    text = _MARKUP_CHARS_RE.sub(" ", text)
+    text = _RULE_RE.sub(" ", text)
+    text = text.replace('"', "'")
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "..."
+    return text
+
+
+def sanitize_issue_key(value: Any) -> str:
+    key = value if isinstance(value, str) else ""
+    return key if _ISSUE_KEY_RE.match(key) else "INVALID-KEY"
 
 
 class JiraClient:
@@ -52,6 +82,8 @@ class JiraClient:
         
         Returns:
             A list of dictionaries, each containing details of a vulnerability ticket.
+            Summary and description are untrusted user input; they are flattened to a
+            single line, stripped of markup and truncated before being returned.
         """
         if not self.is_connected() or not jql_query:
             return []
@@ -112,10 +144,12 @@ class JiraClient:
         tickets = []
         for issue in all_issues:
             tickets.append({
-                "key": issue.key,
-                "summary": issue.fields.summary,
-                "description": getattr(issue.fields, 'description', 'No description.'),
-                "status": issue.fields.status.name,
+                "key": sanitize_issue_key(issue.key),
+                "summary": sanitize_ticket_text(issue.fields.summary, SUMMARY_MAX_CHARS),
+                "description": sanitize_ticket_text(
+                    getattr(issue.fields, 'description', None), DESCRIPTION_MAX_CHARS
+                ),
+                "status": sanitize_ticket_text(issue.fields.status.name, 40),
             })
         
         print(f"Found {len(tickets)} relevant vulnerability tickets in Jira.")
