@@ -11,6 +11,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Set
 import hashlib
 
+from .finding_parser import parse_findings
+
 class HTMLReportGenerator:
     """Generate HTML reports for security scan results."""
     
@@ -77,25 +79,19 @@ class HTMLReportGenerator:
         vulnerabilities = {
             "Critical": [], "High": [], "Medium": [], "Low": []
         }
-        pattern = re.compile(
-            r"-\s*\*\*Vulnerability Level\*\*:\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\n"
-            r"-\s*\*\*Issue\*\*:\s*(.*?)\n"
-            r"-\s*\*\*Location\*\*:\s*(.*?)\n"
-            r"-\s*\*\*Risk\*\*:\s*(.*?)\n"
-            r"-\s*\*\*Fix\*\*:\s*(.*?)\n",
-            re.DOTALL | re.IGNORECASE
-        )
-
-        for match in pattern.finditer(analysis_text):
-            level, issue, location, risk, fix = match.groups()
-            level = level.strip().capitalize()
-            
-            vulnerabilities[level].append({
-                "issue": issue.strip(),
-                "location": location.strip(),
-                "risk": risk.strip(),
-                "fix": fix.strip(),
-            })
+        for finding in parse_findings(analysis_text):
+            level = finding["severity"].capitalize()
+            if level not in vulnerabilities:
+                continue
+            vuln = {
+                "issue": finding["issue"],
+                "location": finding["location"],
+                "risk": finding["risk"],
+                "fix": finding["fix"],
+            }
+            if finding["cvss_vector"]:
+                vuln["cvss_vector"] = finding["cvss_vector"]
+            vulnerabilities[level].append(vuln)
         return vulnerabilities
 
     def _process_results_by_severity(self, results: List[Dict[str, Any]]) -> Dict[str, List[Dict]]:

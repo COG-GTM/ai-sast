@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from src.core.scanner import SecurityScanner
 from src.core.report import HTMLReportGenerator
+from src.core.finding_parser import parse_findings
 
 
 def _generate_vuln_id(file_path: str, issue: str, location: str) -> str:
@@ -53,24 +54,13 @@ def _store_scan_findings(scan_results: List[Dict], repo_url: str, scan_id: str):
             file_path = result.get('file_path', 'unknown')
             analysis = result.get('analysis', '')
             
-            # Parse vulnerabilities from analysis
-            vuln_pattern = re.compile(
-                r"-\s*\*\*Vulnerability Level\*\*:\s*(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*\n"
-                r"-\s*\*\*Issue\*\*:\s*(.*?)\n"
-                r"-\s*\*\*Location\*\*:\s*(.*?)\n"
-                r"(?:-\s*\*\*CVSS Vector\*\*:\s*(.*?)\n)?"
-                r"-\s*\*\*Risk\*\*:\s*(.*?)\n"
-                r"-\s*\*\*Fix\*\*:\s*(.*?)(?:\n-|\n\n|$)",
-                re.DOTALL | re.IGNORECASE
-            )
-            
-            for match in vuln_pattern.finditer(analysis):
-                severity = match.group(1).strip()
-                issue = match.group(2).strip()
-                location = match.group(3).strip()
-                cvss_vector = match.group(4).strip() if match.group(4) else None
-                risk = match.group(5).strip()
-                fix = match.group(6).strip()
+            for finding in parse_findings(analysis):
+                severity = finding['severity']
+                issue = finding['issue']
+                location = finding['location']
+                cvss_vector = finding['cvss_vector']
+                risk = finding['risk']
+                fix = finding['fix']
                 
                 # Generate vulnerability ID
                 vuln_id = _generate_vuln_id(file_path, issue, location)
